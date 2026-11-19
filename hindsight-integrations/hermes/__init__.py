@@ -413,6 +413,23 @@ def _bank_not_written_yet(exc: Exception) -> bool:
     return getattr(exc, "status", None) == 404
 
 
+def _rewrite_recall_query(query: str) -> str:
+    """Rewrite a raw user message into a standalone retrieval question via Hermes'
+    core rewriter (``plugins.memory.query_rewrite``; configured per-task under
+    ``auxiliary.memory_query_rewrite``). A follow-up like "and what about the
+    other one?" carries none of the entities it refers to, so recalling on the
+    raw text misses; the rewrite resolves them into the question. Fail-open:
+    any error (module absent, LLM failure) returns ``""`` and recall proceeds
+    with the original query."""
+    try:
+        from plugins.memory.query_rewrite import rewrite_memory_query
+
+        return rewrite_memory_query(query)
+    except Exception as exc:
+        logger.debug("Memory query rewrite unavailable: %s", exc)
+        return ""
+
+
 def _load_config() -> dict:
     """$HERMES_HOME/hindsight/config.json (profile-scoped), else ~/.hindsight/config.json
     (legacy, shared), else environment variables."""
@@ -822,6 +839,11 @@ class HindsightMemoryProvider(MemoryProvider):
             {
                 "key": "recall_sync",
                 "description": "Recall synchronously against the current message before each turn (higher relevance, adds recall latency to the turn). Default off: recall runs in the background and is injected on the next turn.",
+                "default": False,
+            },
+            {
+                "key": "recall_query_rewrite",
+                "description": "Rewrite the raw user message into a standalone retrieval question before prefetch recall (Hermes' auxiliary memory_query_rewrite task; fail-open to the raw message). Helps follow-ups that refer to earlier context. Default off.",
                 "default": False,
             },
             {
@@ -1578,6 +1600,11 @@ class HindsightMemoryProvider(MemoryProvider):
         else:
             self._recall_types = list([] if configured_types is None else configured_types) or ["observation"]
         self._recall_min_scores = _normalize_min_scores(cfg.get("recall_min_scores"))
+        # Opt-in: the prefetch query is the *raw* user message by default. With this
+        # on, it is first rewritten into a standalone retrieval question (see
+        # _rewrite_recall_query); only the prefetch path rewrites — the
+        # hindsight_recall tool already receives model-composed queries.
+        self._recall_query_rewrite = bool(cfg.get("recall_query_rewrite", False))
         self._recall_prompt_preamble = cfg.get("recall_prompt_preamble", "")
         self._recall_indicator = bool(cfg.get("recall_indicator", True))
 
@@ -1763,6 +1790,11 @@ class HindsightMemoryProvider(MemoryProvider):
         -> (text, memory count); the count is 0 for reflect (synthesis) and on error."""
         if self._recall_max_input_chars:
             query = query[: self._recall_max_input_chars]
+        if self._recall_query_rewrite:
+            rewritten = _rewrite_recall_query(query)
+            if rewritten:
+                logger.debug("Recall: rewrote query (%d -> %d chars)", len(query), len(rewritten))
+                query = rewritten
         try:
             if self._prefetch_method == "reflect":
                 logger.debug("Recall: calling reflect (bank=%s, query_len=%d)", self._bank_id, len(query))

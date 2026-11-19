@@ -267,6 +267,7 @@ The lookup stops at the repository root. Only `bank_id` is read.
 | `recall_min_scores` | — | Minimum relevance per score field, as a JSON object (e.g. `{"reranker": 0.25}` or `{"semantic": 0.5}`). Applies to both auto-recall and the `hindsight_recall` tool. See the tip below. |
 | `auto_recall` | `true` | Automatically recall memories before each turn |
 | `recall_sync` | `false` | Recall synchronously against the *current* message each turn (higher relevance, adds recall latency). Default off: recall runs in the background and is injected on the next turn. |
+| `recall_query_rewrite` | `false` | Rewrite the raw user message into a standalone retrieval question before prefetch recall, via Hermes' `auxiliary.memory_query_rewrite` task. Helps follow-ups ("and what about the other one?") that name none of their entities. Fail-open: any rewrite failure recalls on the raw message. Only the prefetch path rewrites — the `hindsight_recall` tool's query is already model-composed. |
 | `recall_indicator` | `true` | Show a `👁️ Hindsight — recalled N memories` status line when auto-recall injects memory. Turn off for customer-facing agents. |
 
 > **Behavior change — `recall_types` defaults to `observation` only.**
